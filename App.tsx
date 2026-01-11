@@ -8,7 +8,7 @@ import {
   UserCircle, ShoppingCart, Receipt, 
   Wallet2, CloudLightning, RefreshCw, Zap, Lock, Camera, 
   Package, Banknote, Gift, Copy, CheckCircle2, AlertCircle,
-  Database, Trash
+  Database, Trash, Share2, Download, Upload, Info
 } from 'lucide-react';
 
 // --- UTILS ---
@@ -38,6 +38,7 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   
   // --- SYNC STATE ---
   const [syncId, setSyncId] = useState(() => localStorage.getItem('ub_sync_id') || '');
@@ -82,14 +83,20 @@ const App: React.FC = () => {
 
   // --- CLOUD SYNC LOGIC ---
   const handlePushToCloud = async () => {
+    if (!window.navigator.onLine) {
+      alert("Koneksi Internet Terputus. Periksa paket data atau WiFi Anda.");
+      return;
+    }
+
     setIsSyncing(true);
     try {
+      // Optimasi Payload: Jangan kirim gambar yang terlalu besar jika ada
       const fullData = { 
         app_signature: "UB_MQI_OFFICIAL",
-        members, 
+        members: members.map(m => ({ ...m, avatar: m.avatar?.startsWith('data:image') ? '' : m.avatar })), 
         products, 
-        transactions, 
-        sales, 
+        transactions: transactions.slice(-500), // Batasi riwayat transaksi jika terlalu banyak untuk cloud gratis
+        sales: sales.slice(-200),
         shuPool, 
         memberShu,
         lastUpdated: new Date().toISOString()
@@ -103,18 +110,21 @@ const App: React.FC = () => {
         body: JSON.stringify(fullData)
       });
 
-      if (!response.ok) throw new Error("Server Cloud menolak permintaan.");
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Server menolak (${response.status}). Data mungkin terlalu besar.`);
+      }
       
       const result = await response.json();
       
       if (!syncId && result.id) {
         setSyncId(result.id);
-        alert(`BERHASIL MENDAFTAR!\n\nKODE CLOUD ANDA: ${result.id}\n\nGunakan kode ini di HP lain untuk menarik data.`);
+        alert(`REGISTRASI CLOUD BERHASIL!\n\nID DATABASE: ${result.id}\n\nBerikan ID ini kepada pengurus lain.`);
       } else {
-        alert("Sinkronisasi Berhasil! Data di Cloud sudah diperbarui.");
+        alert("Sinkronisasi Berhasil! Database cloud telah diperbarui.");
       }
     } catch (err: any) {
-      alert("GAGAL MENGIRIM DATA: " + err.message);
+      alert("GAGAL SYNC: " + err.message + "\n\nSaran: Gunakan fitur 'Cadangan Manual' jika cloud terus bermasalah.");
     } finally { setIsSyncing(false); }
   };
 
@@ -128,19 +138,11 @@ const App: React.FC = () => {
     setIsSyncing(true);
     try {
       const res = await fetch(`https://api.npoint.io/${cleanId}`);
-      if (!res.ok) {
-        if (res.status === 404) throw new Error("Kode Salah atau Data sudah kedaluwarsa.");
-        throw new Error("Gagal menghubungi server.");
-      }
+      if (!res.ok) throw new Error("ID Cloud Salah atau Data telah dihapus server.");
       
       const data = await res.json();
+      if (data.app_signature !== "UB_MQI_OFFICIAL") throw new Error("ID ini bukan milik UB MQI.");
       
-      // Validasi apakah ini data aplikasi kita
-      if (data.app_signature !== "UB_MQI_OFFICIAL") {
-        throw new Error("Kode ini bukan milik database UB MQI.");
-      }
-      
-      // Update local state with cloud data
       setMembers(data.members || INITIAL_MEMBERS);
       setProducts(data.products || []);
       setTransactions(data.transactions || []);
@@ -149,7 +151,7 @@ const App: React.FC = () => {
       setMemberShu(data.memberShu || []);
       setSyncId(cleanId);
       
-      alert("SINKRONISASI BERHASIL!\nSeluruh data terbaru telah dimuat ke perangkat ini.");
+      alert("DATA BERHASIL DIAMBIL!");
       return true;
     } catch (err: any) {
       alert("ERROR: " + err.message);
@@ -157,8 +159,25 @@ const App: React.FC = () => {
     } finally { setIsSyncing(false); }
   };
 
+  const handleManualImport = (jsonStr: string) => {
+    try {
+      const data = JSON.parse(jsonStr);
+      if (data.app_signature !== "UB_MQI_OFFICIAL") throw new Error("Format tidak valid.");
+      setMembers(data.members);
+      setProducts(data.products);
+      setTransactions(data.transactions);
+      setSales(data.sales);
+      setShuPool(data.shuPool);
+      setMemberShu(data.memberShu);
+      alert("Impor Data Manual Berhasil!");
+      setIsBackupModalOpen(false);
+    } catch (e) {
+      alert("Gagal Impor: Teks bukan format database UB MQI yang sah.");
+    }
+  };
+
   const resetSyncId = () => {
-    if (window.confirm("Hapus kode sinkronisasi? Anda harus mendaftar ulang jika ingin menggunakan cloud lagi.")) {
+    if (window.confirm("Hapus ID Cloud? Anda harus mendaftar ID baru untuk sinkronisasi berikutnya.")) {
       setSyncId('');
       localStorage.removeItem('ub_sync_id');
     }
@@ -251,7 +270,7 @@ const App: React.FC = () => {
       role, members, setMembers, products, setProducts, transactions, 
       setTransactions, sales, setSales, user: currentUser, 
       shuPool, memberShu, setActiveTab, syncId, handlePushToCloud, isSyncing,
-      onWithdrawSHU: handleWithdrawSHU, resetSyncId
+      onWithdrawSHU: handleWithdrawSHU, resetSyncId, setIsBackupModalOpen
     };
     switch (activeTab) {
       case 'dashboard': return <DashboardView {...common} />;
@@ -333,6 +352,53 @@ const App: React.FC = () => {
       </nav>
 
       {isSidebarOpen && <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />}
+      
+      {/* Manual Backup Modal */}
+      <Modal title="Cadangan Database Manual" isOpen={isBackupModalOpen} onClose={() => setIsBackupModalOpen(false)}>
+        <div className="space-y-4">
+          <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl text-amber-800 text-xs flex gap-3">
+             <Info className="shrink-0" size={16} />
+             <p>Gunakan fitur ini jika Cloud npoint.io sedang bermasalah atau untuk mencadangkan data ke WhatsApp/Email.</p>
+          </div>
+          
+          <div className="space-y-2">
+             <p className="text-[10px] font-black text-slate-400 uppercase">Ekspor Data (Salin ke perangkat lain)</p>
+             <textarea 
+                readOnly 
+                value={JSON.stringify({app_signature: "UB_MQI_OFFICIAL", members, products, transactions, sales, shuPool, memberShu})} 
+                className="w-full h-32 p-3 bg-slate-50 border rounded-xl text-[10px] font-mono focus:outline-none"
+             />
+             <button 
+                onClick={() => {
+                   const data = JSON.stringify({app_signature: "UB_MQI_OFFICIAL", members, products, transactions, sales, shuPool, memberShu});
+                   navigator.clipboard.writeText(data);
+                   alert("Database berhasil disalin ke papan klip! Tempel ke WhatsApp atau Email untuk dikirim.");
+                }}
+                className="w-full flex items-center justify-center gap-2 p-3 bg-slate-800 text-white rounded-xl text-xs font-bold active:scale-95 transition-all"
+             >
+                <Copy size={16} /> SALIN TEKS DATABASE
+             </button>
+          </div>
+
+          <div className="pt-4 border-t space-y-2">
+             <p className="text-[10px] font-black text-slate-400 uppercase">Impor Data (Tempel dari perangkat lain)</p>
+             <textarea 
+                id="manual-import-area"
+                placeholder="Tempel teks database di sini..." 
+                className="w-full h-32 p-3 bg-white border rounded-xl text-[10px] font-mono focus:border-emerald-500 outline-none"
+             />
+             <button 
+                onClick={() => {
+                   const el = document.getElementById('manual-import-area') as HTMLTextAreaElement;
+                   if (el.value) handleManualImport(el.value);
+                }}
+                className="w-full flex items-center justify-center gap-2 p-3 bg-emerald-600 text-white rounded-xl text-xs font-bold active:scale-95 transition-all"
+             >
+                <Upload size={16} /> MUAT DATABASE DARI TEKS
+             </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };
@@ -366,7 +432,7 @@ const LoginScreen: React.FC<any> = ({ members, onLogin, onSync, isSyncing }) => 
         <div className="text-center">
           <div className="inline-flex items-center justify-center w-20 h-20 bg-emerald-50 rounded-[2.2rem] mb-4 text-emerald-600 shadow-inner"><Store size={40} /></div>
           <h2 className="text-3xl font-black text-slate-800 tracking-tight">UB. MQI</h2>
-          <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mt-1">Qurrotul 'Ibaad Management</p>
+          <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mt-1">Management Database</p>
         </div>
         <form onSubmit={(e) => { 
           e.preventDefault(); 
@@ -375,19 +441,19 @@ const LoginScreen: React.FC<any> = ({ members, onLogin, onSync, isSyncing }) => 
         }} className="space-y-4">
           <div className="space-y-1">
             <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Email</label>
-            <input type="email" placeholder="email@gmail.com" value={email} onChange={e=>setEmail(e.target.value)} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none focus:border-emerald-500 transition-colors font-medium" required />
+            <input type="email" placeholder="user@mqi.com" value={email} onChange={e=>setEmail(e.target.value)} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none focus:border-emerald-500 transition-colors font-medium" required />
           </div>
           <div className="space-y-1">
             <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Password</label>
             <input type="password" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} className="w-full p-4 bg-slate-50 border rounded-2xl outline-none focus:border-emerald-500 transition-colors font-medium" required />
           </div>
-          <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black shadow-lg hover:bg-emerald-700 active:scale-95 transition-all uppercase tracking-widest">MASUK</button>
+          <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black shadow-lg hover:bg-emerald-700 active:scale-95 transition-all uppercase tracking-widest">MASUK APLIKASI</button>
         </form>
         <div className="pt-6 border-t text-center">
-          <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mb-3 flex items-center justify-center gap-2"><CloudLightning size={12} /> Tarik Data Dari Cloud</p>
+          <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mb-3 flex items-center justify-center gap-2"><CloudLightning size={12} /> Ambil Data Cloud</p>
           <div className="flex gap-2">
             <input 
-                placeholder="KODE SYNC" 
+                placeholder="ID CLOUD" 
                 value={syncCode} 
                 onChange={e=>setSyncCode(e.target.value)} 
                 className="flex-1 p-3 bg-slate-50 border rounded-xl text-center font-black uppercase text-xs tracking-widest focus:border-emerald-500 outline-none" 
@@ -396,27 +462,20 @@ const LoginScreen: React.FC<any> = ({ members, onLogin, onSync, isSyncing }) => 
                 onClick={() => onSync(syncCode)} 
                 disabled={isSyncing} 
                 className="bg-slate-800 text-white p-3 rounded-xl active:scale-90 disabled:opacity-50 shadow-md"
-                title="Tarik Data Cloud"
             >
               <RefreshCw className={isSyncing ? "animate-spin" : ""} size={18} />
             </button>
           </div>
-          <p className="text-[8px] text-slate-400 italic mt-2">*Masukkan kode sinkronisasi untuk memuat database terbaru.</p>
         </div>
       </div>
     </div>
   );
 };
 
-const DashboardView: React.FC<any> = ({ transactions, members, sales, role, user, syncId, handlePushToCloud, isSyncing, setActiveTab, resetSyncId }) => {
+const DashboardView: React.FC<any> = ({ transactions, members, sales, role, user, syncId, handlePushToCloud, isSyncing, setActiveTab, resetSyncId, setIsBackupModalOpen }) => {
   const isAdmin = role === UserRole.ADMIN;
   const cash = useMemo(() => transactions.filter(t => t.category !== 'HPP').reduce((acc: number, t: any) => t.type === 'DEBIT' ? acc + t.amount : acc - t.amount, 0), [transactions]);
   const receivables = useMemo(() => sales.filter(s => s.paymentStatus === 'Piutang').reduce((acc: number, s: any) => acc + s.total, 0), [sales]);
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    alert("Kode berhasil disalin!");
-  };
 
   if (isAdmin) {
     return (
@@ -434,49 +493,46 @@ const DashboardView: React.FC<any> = ({ transactions, members, sales, role, user
                 <CloudLightning size={24} />
               </div>
               <div>
-                <h3 className="text-xs font-black text-slate-800 uppercase tracking-widest">Status Cloud</h3>
+                <h3 className="text-xs font-black text-slate-800 uppercase tracking-widest">Sinkronisasi Cloud</h3>
                 <div className="flex items-center gap-2 mt-0.5">
                   {syncId ? (
                     <span className="text-xs font-bold text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> ID: {syncId}</span>
                   ) : (
-                    <span className="text-xs font-bold text-slate-400 flex items-center gap-1"><AlertCircle size={12} /> Belum Sinkron</span>
+                    <span className="text-xs font-bold text-slate-400 flex items-center gap-1"><AlertCircle size={12} /> Belum Terhubung</span>
                   )}
                 </div>
               </div>
             </div>
-            {syncId && <button onClick={resetSyncId} className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg" title="Hapus Kode"><Trash size={18} /></button>}
+            {syncId && <button onClick={resetSyncId} className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg"><Trash size={18} /></button>}
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <button 
               onClick={handlePushToCloud} 
               disabled={isSyncing} 
-              className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50"
+              className="bg-emerald-600 text-white p-4 rounded-2xl text-[9px] font-black uppercase tracking-widest shadow-lg flex flex-col items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
             >
-              <RefreshCw className={isSyncing ? "animate-spin" : ""} size={16} /> 
-              {syncId ? 'UPDATE DATA KE CLOUD' : 'DAFTARKAN DATABASE BARU'}
+              <RefreshCw className={isSyncing ? "animate-spin" : ""} size={20} /> 
+              {syncId ? 'Update Cloud' : 'Daftar Cloud'}
             </button>
-            
-            {syncId && (
-              <button 
-                onClick={() => copyToClipboard(syncId)}
-                className="bg-slate-800 text-white px-6 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all"
-              >
-                <Copy size={16} /> SALIN KODE CLOUD
-              </button>
-            )}
+            <button 
+              onClick={() => setIsBackupModalOpen(true)}
+              className="bg-slate-800 text-white p-4 rounded-2xl text-[9px] font-black uppercase tracking-widest shadow-lg flex flex-col items-center justify-center gap-2 active:scale-95"
+            >
+              <Database size={20} /> Cadangan Teks
+            </button>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 flex flex-col items-center text-center shadow-sm">
-            <div className="p-4 bg-blue-50 text-blue-600 rounded-[1.8rem] mb-3 shadow-inner"><Users size={24} /></div>
+            <div className="p-4 bg-blue-50 text-blue-600 rounded-[1.8rem] mb-3"><Users size={24} /></div>
             <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Anggota</p>
             <p className="text-2xl font-black text-slate-800 mt-1">{members.length}</p>
           </div>
           <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 flex flex-col items-center text-center shadow-sm">
-            <div className="p-4 bg-rose-50 text-rose-600 rounded-[1.8rem] mb-3 shadow-inner"><Receipt size={24} /></div>
-            <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Piutang Toko</p>
+            <div className="p-4 bg-rose-50 text-rose-600 rounded-[1.8rem] mb-3"><Receipt size={24} /></div>
+            <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Piutang</p>
             <p className="text-2xl font-black text-rose-600 mt-1">Rp {formatIDR(receivables)}</p>
           </div>
         </div>
@@ -490,16 +546,16 @@ const DashboardView: React.FC<any> = ({ transactions, members, sales, role, user
         <img src={user.avatar} className="w-16 h-16 rounded-[2rem] border-4 border-white shadow-xl object-cover" />
         <div>
           <h2 className="text-2xl font-black text-slate-800 tracking-tight leading-tight">Halo, {user.name.split(' ')[0]}!</h2>
-          <p className="text-xs text-emerald-600 font-bold uppercase tracking-widest">Anggota UB. MQI</p>
+          <p className="text-xs text-emerald-600 font-bold uppercase tracking-widest">Sahabat MQI</p>
         </div>
       </div>
       <div className="bg-emerald-700 p-8 rounded-[2.5rem] text-white shadow-xl relative overflow-hidden group">
         <div className="absolute -top-4 -right-4 p-4 opacity-10 rotate-12 group-hover:scale-110 transition-transform duration-700"><Zap size={100} /></div>
-        <h3 className="text-xl font-black leading-tight">Pantau Keuangan</h3>
-        <p className="text-sm text-emerald-50 font-medium mt-2 opacity-90">Lihat saldo simpanan, hutang, dan SHU secara langsung di HP Anda.</p>
+        <h3 className="text-xl font-black leading-tight">Pantau Simpanan</h3>
+        <p className="text-sm text-emerald-50 font-medium mt-2 opacity-90">Pantau pergerakan tabungan dan SHU Anda secara real-time.</p>
         <div className="flex gap-2 mt-6">
-          <button onClick={() => setActiveTab('store')} className="bg-white text-emerald-700 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg">BELANJA <ShoppingCart size={14} /></button>
-          <button onClick={() => setActiveTab('simpanan-saya')} className="bg-emerald-800/50 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest active:scale-95 border border-emerald-500/30">SIMPANAN</button>
+          <button onClick={() => setActiveTab('store')} className="bg-white text-emerald-700 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center gap-2">BELANJA <ShoppingCart size={14} /></button>
+          <button onClick={() => setActiveTab('simpanan-saya')} className="bg-emerald-800/50 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-emerald-500/30">TABUNGAN</button>
         </div>
       </div>
     </div>
@@ -514,21 +570,21 @@ const AnggotaView: React.FC<any> = ({ members, setMembers, role }) => {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex items-center justify-between"><h2 className="text-2xl font-black text-slate-800">Anggota</h2>{isAdmin && <button onClick={() => setIsAddOpen(true)} className="bg-emerald-600 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-lg flex items-center gap-2 active:scale-95"><Plus size={18} /> TAMBAH</button>}</div>
+      <div className="flex items-center justify-between"><h2 className="text-2xl font-black text-slate-800">Daftar Anggota</h2>{isAdmin && <button onClick={() => setIsAddOpen(true)} className="bg-emerald-600 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-lg flex items-center gap-2 active:scale-95"><Plus size={18} /> BARU</button>}</div>
       <div className="relative">
         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-        <input placeholder="Cari nama anggota..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-white border border-slate-100 rounded-2xl font-bold shadow-sm outline-none focus:border-emerald-500 transition-colors" />
+        <input placeholder="Cari nama..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-white border border-slate-100 rounded-2xl font-bold shadow-sm outline-none focus:border-emerald-500 transition-colors" />
       </div>
       <div className="grid gap-4">
         {filtered.map((m: any) => (
-          <div key={m.id} className="bg-white p-5 rounded-[2.2rem] flex items-center gap-4 border border-slate-100 shadow-sm active:bg-slate-50 transition-colors">
+          <div key={m.id} className="bg-white p-5 rounded-[2.2rem] flex items-center gap-4 border border-slate-100 shadow-sm">
             <img src={m.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${m.name}`} className="w-14 h-14 rounded-[1.4rem] border border-slate-50 object-cover shadow-sm" />
             <div className="flex-1 min-w-0">
               <p className="font-bold truncate text-slate-800 text-sm leading-tight">{m.name}</p>
               <p className="text-[10px] text-slate-400 font-black uppercase tracking-tighter mt-0.5">{m.id} • {m.role}</p>
             </div>
             {isAdmin && m.id !== 'ADM001' && (
-              <button className="p-2.5 text-rose-500 hover:bg-rose-50 rounded-xl transition-colors" onClick={() => { if(window.confirm('Hapus anggota ini?')) setMembers(members.filter((mb:any)=>mb.id !== m.id)); }}><Trash2 size={18} /></button>
+              <button className="p-2.5 text-rose-500" onClick={() => { if(window.confirm('Hapus anggota ini?')) setMembers(members.filter((mb:any)=>mb.id !== m.id)); }}><Trash2 size={18} /></button>
             )}
           </div>
         ))}
@@ -551,14 +607,14 @@ const AnggotaView: React.FC<any> = ({ members, setMembers, role }) => {
           }; 
           setMembers([...members, nm]); setIsAddOpen(false); 
         }} className="space-y-4">
-          <input name="id" placeholder="ID (Contoh: AG001)" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
+          <input name="id" placeholder="ID (AG001)" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
           <input name="name" placeholder="Nama Lengkap" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
-          <input name="email" type="email" placeholder="Email Login" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
-          <input name="password" placeholder="Password Login" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
-          <input name="phone" placeholder="WhatsApp (08...)" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
-          <select name="role" className="w-full p-4 bg-slate-50 border rounded-xl font-bold focus:border-emerald-500 outline-none"><option value={UserRole.ANGGOTA}>ANGGOTA</option><option value={UserRole.ADMIN}>ADMIN</option></select>
-          <textarea name="address" placeholder="Alamat Lengkap" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" rows={2} required />
-          <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black shadow-lg uppercase tracking-widest">SIMPAN</button>
+          <input name="email" type="email" placeholder="Email" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
+          <input name="password" placeholder="Password" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
+          <input name="phone" placeholder="WhatsApp" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
+          <select name="role" className="w-full p-4 bg-slate-50 border rounded-xl font-bold"><option value={UserRole.ANGGOTA}>ANGGOTA</option><option value={UserRole.ADMIN}>ADMIN</option></select>
+          <textarea name="address" placeholder="Alamat" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" rows={2} required />
+          <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black uppercase shadow-lg">SIMPAN</button>
         </form>
       </Modal>
     </div>
@@ -574,15 +630,15 @@ const SimpananView: React.FC<any> = ({ transactions, setTransactions, user, role
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex items-center justify-between"><h2 className="text-2xl font-black text-slate-800">Simpanan</h2>{isAdmin && <button onClick={() => setIsAddOpen(true)} className="bg-emerald-600 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-lg flex items-center gap-2 active:scale-95"><Plus size={18} /> INPUT DANA</button>}</div>
+      <div className="flex items-center justify-between"><h2 className="text-2xl font-black text-slate-800">Simpanan</h2>{isAdmin && <button onClick={() => setIsAddOpen(true)} className="bg-emerald-600 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-lg flex items-center gap-2 active:scale-95"><Plus size={18} /> INPUT</button>}</div>
       <div className="bg-emerald-600 p-10 rounded-[2.5rem] text-white shadow-xl relative overflow-hidden group">
-        <p className="text-emerald-100 text-[10px] font-black uppercase tracking-widest opacity-80">Total Saldo {isAdmin ? 'UB' : 'Tabungan Saya'}</p>
+        <p className="text-emerald-100 text-[10px] font-black uppercase tracking-widest opacity-80">Total Saldo {isAdmin ? 'Koperasi' : 'Tabungan'}</p>
         <h3 className="text-4xl font-black mt-1 tracking-tight">Rp {formatIDR(total)}</h3>
       </div>
       <div className="bg-white rounded-[2.5rem] border border-slate-100 divide-y overflow-hidden shadow-sm">
-        <div className="px-6 py-4 bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest">Riwayat</div>
+        <div className="px-6 py-4 bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest">Riwayat Kas</div>
         {displayData.slice().reverse().map((t: any) => (
-          <div key={t.id} className="p-6 flex justify-between items-center text-xs hover:bg-slate-50 transition-colors">
+          <div key={t.id} className="p-6 flex justify-between items-center text-xs hover:bg-slate-50">
             <div>
                 <p className="font-bold text-slate-800 text-sm leading-tight">{t.description}</p>
                 <p className="text-[9px] text-slate-400 font-bold uppercase mt-1 tracking-wider">{t.date}</p>
@@ -592,6 +648,7 @@ const SimpananView: React.FC<any> = ({ transactions, setTransactions, user, role
             </p>
           </div>
         ))}
+        {displayData.length === 0 && <p className="text-center py-20 text-slate-300 italic text-sm">Belum ada aktivitas kas.</p>}
       </div>
       <Modal title="Input Simpanan" isOpen={isAddOpen} onClose={() => setIsAddOpen(false)}>
         <form onSubmit={(e) => { 
@@ -610,7 +667,7 @@ const SimpananView: React.FC<any> = ({ transactions, setTransactions, user, role
             <select name="subType" className="w-full p-4 bg-slate-50 border rounded-xl font-bold"><option value="Wajib">Wajib</option><option value="Pokok">Pokok</option><option value="Sukarela">Sukarela</option></select>
           </div>
           <input name="amount" type="number" placeholder="Nominal" className="w-full p-4 bg-slate-50 border rounded-xl font-black text-lg focus:border-emerald-500 outline-none" required />
-          <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black shadow-lg uppercase tracking-widest">SIMPAN</button>
+          <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black uppercase shadow-lg">SIMPAN</button>
         </form>
       </Modal>
     </div>
@@ -640,10 +697,10 @@ const StoreView: React.FC<any> = ({ products, setProducts, members, onCheckout, 
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex items-center justify-between"><h2 className="text-2xl font-black text-slate-800">UB. Store</h2>{isAdmin && (<div className="flex gap-2"><button onClick={() => setIsAddOpen(true)} className="p-3 bg-white text-emerald-600 rounded-2xl border border-slate-100 shadow-sm active:scale-90"><Package size={20} /></button><button onClick={() => setIsPOSOpen(true)} className="relative bg-emerald-600 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-lg flex items-center gap-2 active:scale-95"><ShoppingCart size={18} /> KASIR {cart.length > 0 && <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[9px] w-5 h-5 rounded-full flex items-center justify-center border-2 border-white animate-bounce">{cart.length}</span>}</button></div>)}</div>
+      <div className="flex items-center justify-between"><h2 className="text-2xl font-black text-slate-800">UB. Store</h2>{isAdmin && (<div className="flex gap-2"><button onClick={() => setIsAddOpen(true)} className="p-3 bg-white text-emerald-600 rounded-2xl border border-slate-100 shadow-sm"><Package size={20} /></button><button onClick={() => setIsPOSOpen(true)} className="relative bg-emerald-600 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-lg flex items-center gap-2"><ShoppingCart size={18} /> KASIR {cart.length > 0 && <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[9px] w-5 h-5 rounded-full flex items-center justify-center border-2 border-white">{cart.length}</span>}</button></div>)}</div>
       <div className="grid grid-cols-2 gap-4">
         {products.map((p: StoreProduct) => (
-          <div key={p.id} className="bg-white p-3 rounded-[2.2rem] border border-slate-100 shadow-sm relative overflow-hidden group">
+          <div key={p.id} className="bg-white p-3 rounded-[2.2rem] border border-slate-100 shadow-sm relative group">
             <div className="aspect-square bg-slate-50 rounded-[1.8rem] mb-3 flex items-center justify-center overflow-hidden border border-slate-50">
               <img src={p.image || `https://api.dicebear.com/7.x/initials/svg?seed=${p.name}`} className="object-cover w-full h-full group-hover:scale-110 transition-transform duration-500" alt={p.name} />
             </div>
@@ -651,12 +708,12 @@ const StoreView: React.FC<any> = ({ products, setProducts, members, onCheckout, 
             <p className="text-emerald-700 font-black text-xs px-1">Rp {formatIDR(p.sellPrice)}</p>
             <div className="flex justify-between items-center mt-3 px-1">
               <span className={`text-[9px] font-black px-2 py-1 rounded-full ${p.stock > 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{p.stock > 0 ? `STOK: ${p.stock}` : 'HABIS'}</span>
-              {isAdmin && <button onClick={() => addToCart(p)} className="p-2 text-emerald-600 bg-emerald-50 rounded-xl active:scale-90 transition-transform"><Plus size={18} /></button>}
+              {isAdmin && <button onClick={() => addToCart(p)} className="p-2 text-emerald-600 bg-emerald-50 rounded-xl"><Plus size={18} /></button>}
             </div>
           </div>
         ))}
       </div>
-      <Modal title="Produk Baru" isOpen={isAddOpen} onClose={() => setIsAddOpen(false)}>
+      <Modal title="Produk Toko" isOpen={isAddOpen} onClose={() => setIsAddOpen(false)}>
         <form onSubmit={(e) => { 
           e.preventDefault(); const fd = new FormData(e.currentTarget); 
           const np: StoreProduct = { 
@@ -671,11 +728,11 @@ const StoreView: React.FC<any> = ({ products, setProducts, members, onCheckout, 
             <input name="buyPrice" type="number" placeholder="Harga Beli" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
             <input name="sellPrice" type="number" placeholder="Harga Jual" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
           </div>
-          <input name="stock" type="number" placeholder="Stok Awal" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
-          <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black shadow-lg">SIMPAN</button>
+          <input name="stock" type="number" placeholder="Stok" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
+          <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black uppercase shadow-lg">SIMPAN</button>
         </form>
       </Modal>
-      <Modal title="Kasir" isOpen={isPOSOpen} onClose={() => setIsPOSOpen(false)}>
+      <Modal title="Kasir Toko" isOpen={isPOSOpen} onClose={() => setIsPOSOpen(false)}>
         <div className="space-y-4">
           <div className="divide-y max-h-[35vh] overflow-y-auto pr-2 hide-scrollbar">
             {cart.map((item, idx) => (
@@ -683,13 +740,13 @@ const StoreView: React.FC<any> = ({ products, setProducts, members, onCheckout, 
                 <div><p className="font-bold text-slate-800 text-sm">{item.product.name}</p><p className="text-[10px] text-slate-400 font-bold mt-1">{item.qty} x Rp {formatIDR(item.product.sellPrice)}</p></div>
                 <div className="flex items-center gap-3">
                     <p className="font-black text-emerald-600 text-sm">Rp {formatIDR(item.product.sellPrice * item.qty)}</p>
-                    <button onClick={() => removeFromCart(item.product.id)} className="text-rose-400 p-2 hover:bg-rose-50 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                    <button onClick={() => removeFromCart(item.product.id)} className="text-rose-400 p-2"><Trash2 size={16} /></button>
                 </div>
               </div>
             ))}
           </div>
-          <div className="bg-emerald-50 p-6 rounded-2xl flex justify-between items-center border border-emerald-100 shadow-inner">
-            <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest">Total Belanja</span>
+          <div className="bg-emerald-50 p-6 rounded-2xl flex justify-between items-center border border-emerald-100">
+            <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest">Total</span>
             <span className="text-2xl font-black text-emerald-700">Rp {formatIDR(cartTotal)}</span>
           </div>
           <form onSubmit={(e) => { 
@@ -703,9 +760,9 @@ const StoreView: React.FC<any> = ({ products, setProducts, members, onCheckout, 
             }); 
             setCart([]); setIsPOSOpen(false); 
           }} className="space-y-4">
-            <select name="memberId" className="w-full p-4 bg-white border border-slate-100 rounded-xl font-bold focus:border-emerald-500 outline-none" required><option value="">-- Pilih Anggota --</option>{members.map((m: any) => (<option key={m.id} value={m.id}>{m.name}</option>))}</select>
+            <select name="memberId" className="w-full p-4 bg-white border border-slate-100 rounded-xl font-bold focus:border-emerald-500 outline-none" required><option value="">-- Pilih Pembeli --</option>{members.map((m: any) => (<option key={m.id} value={m.id}>{m.name}</option>))}</select>
             <select name="paymentStatus" className="w-full p-4 bg-white border border-slate-100 rounded-xl font-bold focus:border-emerald-500 outline-none" required><option value="Lunas">Tunai (Lunas)</option><option value="Piutang">Hutang (Piutang)</option></select>
-            <button type="submit" disabled={cart.length === 0} className="w-full bg-emerald-600 text-white py-5 rounded-2xl font-black shadow-xl uppercase tracking-widest">BAYAR</button>
+            <button type="submit" disabled={cart.length === 0} className="w-full bg-emerald-600 text-white py-5 rounded-2xl font-black uppercase shadow-xl tracking-widest active:scale-95">KONFIRMASI BAYAR</button>
           </form>
         </div>
       </Modal>
@@ -720,20 +777,20 @@ const KasView: React.FC<any> = ({ transactions, setTransactions }) => {
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex items-center justify-between"><h2 className="text-2xl font-black text-slate-800">Kas Umum</h2><button onClick={() => setIsAddOpen(true)} className="bg-emerald-600 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-lg active:scale-95 transition-all"><Plus size={18} /> INPUT KAS</button></div>
-      <div className="bg-slate-800 p-8 rounded-[2.5rem] text-white shadow-xl text-center relative overflow-hidden">
-          <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest">Saldo Kas Utama</p>
+      <div className="bg-slate-800 p-8 rounded-[2.5rem] text-white shadow-xl text-center relative overflow-hidden group">
+          <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest opacity-80">Saldo Kas Sekarang</p>
           <h3 className="text-4xl font-black mt-2 tracking-tighter">Rp {formatIDR(balance)}</h3>
       </div>
       <div className="bg-white rounded-[2.5rem] border border-slate-100 divide-y overflow-hidden shadow-sm">
-        <div className="px-6 py-4 bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest">Aliran Dana</div>
+        <div className="px-6 py-4 bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest">Aliran Kas</div>
         {data.slice().reverse().map((t: any) => (
-          <div key={t.id} className="p-6 flex justify-between items-center text-xs hover:bg-slate-50 transition-colors">
+          <div key={t.id} className="p-6 flex justify-between items-center text-xs hover:bg-slate-50">
             <div><p className="font-bold text-slate-800 text-sm">{t.description}</p><p className="text-[9px] text-slate-400 font-bold uppercase mt-1 tracking-wider">{t.category} • {t.date}</p></div>
             <p className={`font-black ${t.type === 'DEBIT' ? 'text-emerald-600' : 'text-rose-600'} text-base`}>{t.type === 'DEBIT' ? '+' : '-'} Rp {formatIDR(t.amount)}</p>
           </div>
         ))}
       </div>
-      <Modal title="Input Transaksi Kas" isOpen={isAddOpen} onClose={() => setIsAddOpen(false)}>
+      <Modal title="Transaksi Kas" isOpen={isAddOpen} onClose={() => setIsAddOpen(false)}>
         <form onSubmit={(e) => { 
           e.preventDefault(); const fd = new FormData(e.currentTarget); 
           setTransactions([...transactions, { 
@@ -742,10 +799,10 @@ const KasView: React.FC<any> = ({ transactions, setTransactions }) => {
           }]); 
           setIsAddOpen(false); 
         }} className="space-y-4">
-          <select name="type" className="w-full p-4 bg-slate-50 border rounded-xl font-bold focus:border-emerald-500 outline-none"><option value="DEBIT">Kas Masuk</option><option value="KREDIT">Kas Keluar</option></select>
-          <input name="description" placeholder="Keterangan" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
+          <select name="type" className="w-full p-4 bg-slate-50 border rounded-xl font-bold focus:border-emerald-500 outline-none"><option value="DEBIT">Masuk</option><option value="KREDIT">Keluar</option></select>
+          <input name="description" placeholder="Keterangan Transaksi" className="w-full p-4 bg-slate-50 border rounded-xl font-bold" required />
           <input name="amount" type="number" placeholder="Nominal" className="w-full p-4 bg-slate-50 border rounded-xl font-black text-lg focus:border-emerald-500 outline-none" required />
-          <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black shadow-lg uppercase tracking-widest">SIMPAN</button>
+          <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black uppercase shadow-lg">SIMPAN KAS</button>
         </form>
       </Modal>
     </div>
@@ -771,25 +828,25 @@ const KeuanganView: React.FC<any> = ({ transactions, products, sales, shuPool })
   
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <h2 className="text-2xl font-black text-slate-800">Laporan Keuangan</h2>
+      <h2 className="text-2xl font-black text-slate-800">Laporan</h2>
       <div className="flex bg-white p-1.5 rounded-2xl border border-slate-100 shadow-sm">
         {['neraca', 'labarugi'].map(t => (<button key={t} onClick={() => setTab(t)} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${tab === t ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-400'}`}>{t === 'neraca' ? 'Neraca' : 'Laba Rugi'}</button>))}
       </div>
       <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-4 text-slate-800">
         {tab === 'neraca' && (
           <>
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2">Aktiva (Harta)</p>
-            <Row l="Kas Tunai" v={stats.kas} /><Row l="Piutang Toko" v={stats.piutang} /><Row l="Persediaan Produk" v={stats.inv} /><Row l="TOTAL AKTIVA" v={stats.kas + stats.piutang + stats.inv} b />
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2 mt-8">Pasiva (Kewajiban & Modal)</p>
-            <Row l="Simpanan Anggota" v={stats.simpanan} /><Row l="Dana SHU Belum Dibagi" v={stats.shu} /><Row l="TOTAL PASIVA" v={stats.simpanan + stats.shu} b />
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2">Aktiva</p>
+            <Row l="Kas Tunai" v={stats.kas} /><Row l="Piutang Toko" v={stats.piutang} /><Row l="Stok Produk" v={stats.inv} /><Row l="TOTAL AKTIVA" v={stats.kas + stats.piutang + stats.inv} b />
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2 mt-8">Pasiva</p>
+            <Row l="Simpanan" v={stats.simpanan} /><Row l="Dana SHU" v={stats.shu} /><Row l="TOTAL PASIVA" v={stats.simpanan + stats.shu} b />
           </>
         )}
         {tab === 'labarugi' && (
           <>
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2">Pendapatan Usaha</p>
-            <Row l="Penjualan Produk" v={stats.totalPenjualan} />
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2 mt-8">Beban & HPP</p>
-            <Row l="Harga Pokok Penjualan (HPP)" v={stats.totalHPP} n /><Row l="Biaya Operasional (20%)" v={stats.totalBebanOps} n /><div className="bg-emerald-50 p-6 rounded-3xl border border-emerald-100 mt-8 shadow-inner"><Row l="LABA BERSIH" v={stats.labaBersih} b /></div>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2">Pendapatan</p>
+            <Row l="Omset Penjualan" v={stats.totalPenjualan} />
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2 mt-8">Beban</p>
+            <Row l="HPP" v={stats.totalHPP} n /><Row l="Biaya Ops (20%)" v={stats.totalBebanOps} n /><div className="bg-emerald-50 p-6 rounded-3xl border border-emerald-100 mt-8 shadow-inner"><Row l="LABA BERSIH" v={stats.labaBersih} b /></div>
           </>
         )}
       </div>
@@ -813,7 +870,7 @@ const SHUView: React.FC<any> = ({ shuPool, memberShu, user, role, onWithdrawSHU,
       </div>
       {isAdmin && (
         <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 divide-y divide-slate-50 overflow-hidden shadow-sm space-y-3">
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-3">Alokasi SHU</p>
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-3">Pecahan Alokasi</p>
           {Object.entries(shuPool).map(([k, v]) => (
             <div key={k} className="py-3.5 flex justify-between text-xs items-center">
                 <span className="font-bold text-slate-500 uppercase tracking-wider">{k.replace(/([A-Z])/g, ' $1')}</span>
@@ -822,11 +879,11 @@ const SHUView: React.FC<any> = ({ shuPool, memberShu, user, role, onWithdrawSHU,
           ))}
         </div>
       )}
-      <Modal title="Pencairan SHU Anggota" isOpen={isWthOpen} onClose={() => setIsWthOpen(false)}>
+      <Modal title="Pencairan SHU" isOpen={isWthOpen} onClose={() => setIsWthOpen(false)}>
         <form onSubmit={(e) => { e.preventDefault(); const fd = new FormData(e.currentTarget); onWithdrawSHU(fd.get('mId') as string, parseInt(fd.get('amount') as string)); setIsWthOpen(false); }} className="space-y-4">
-          <select name="mId" className="w-full p-4 border border-slate-100 rounded-xl font-bold focus:border-emerald-500 outline-none" required><option value="">-- Pilih Anggota --</option>{memberShu.map(ms => { const m = members.find(mb => mb.id === ms.memberId); if(ms.jasaModal + ms.jasaTransaksi <= 0) return null; return <option key={ms.memberId} value={ms.memberId}>{m?.name} (Saldo: Rp {formatIDR(ms.jasaModal + ms.jasaTransaksi)})</option>})}</select>
-          <input name="amount" type="number" placeholder="Nominal" className="w-full p-4 border border-slate-100 rounded-xl font-black text-lg text-rose-600 focus:border-rose-500 outline-none" required />
-          <button type="submit" className="w-full bg-rose-600 text-white py-4 rounded-xl font-black uppercase shadow-lg active:scale-95 transition-all tracking-widest">PENCAIRAN</button>
+          <select name="mId" className="w-full p-4 border border-slate-100 rounded-xl font-bold" required><option value="">-- Pilih Anggota --</option>{memberShu.map(ms => { const m = members.find(mb => mb.id === ms.memberId); if(ms.jasaModal + ms.jasaTransaksi <= 0) return null; return <option key={ms.memberId} value={ms.memberId}>{m?.name} (Rp {formatIDR(ms.jasaModal + ms.jasaTransaksi)})</option>})}</select>
+          <input name="amount" type="number" placeholder="Nominal Cair" className="w-full p-4 border border-slate-100 rounded-xl font-black text-lg text-rose-600 focus:border-rose-500 outline-none" required />
+          <button type="submit" className="w-full bg-rose-600 text-white py-4 rounded-xl font-black uppercase shadow-lg active:scale-95 transition-all tracking-widest">PROSES CAIR</button>
         </form>
       </Modal>
     </div>
@@ -852,7 +909,7 @@ const HutangView: React.FC<any> = ({ sales, user, role, onPay }) => {
             )}
           </div>
         ))}
-        {list.length === 0 && <div className="py-24 text-center text-slate-300 italic text-sm">Semua catatan belanja sudah lunas.</div>}
+        {list.length === 0 && <div className="py-24 text-center text-slate-300 italic text-sm">Semua lunas.</div>}
       </div>
     </div>
   );
@@ -874,8 +931,8 @@ const ProfilView: React.FC<any> = ({ user, onUpdate }) => {
         <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">Nama Lengkap</label><input value={data.name} onChange={e => setData(p => ({ ...p, name: e.target.value }))} className="w-full p-4 bg-slate-50 rounded-2xl font-bold border border-slate-50 outline-none focus:border-emerald-500 transition-colors" /></div>
         <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">WhatsApp</label><input value={data.phone} onChange={e => setData(p => ({ ...p, phone: e.target.value }))} className="w-full p-4 bg-slate-50 rounded-2xl font-bold border border-slate-50 outline-none focus:border-emerald-500 transition-colors" /></div>
         <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">Alamat Lengkap</label><textarea value={data.address} onChange={e => setData(p => ({ ...p, address: e.target.value }))} className="w-full p-4 bg-slate-50 rounded-2xl font-bold border border-slate-50 outline-none focus:border-emerald-500 transition-colors" rows={2} /></div>
-        <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">Ganti Password</label><input type="text" value={data.password} onChange={e => setData(p => ({ ...p, password: e.target.value }))} className="w-full p-4 bg-slate-50 rounded-2xl font-bold border border-slate-50 outline-none focus:border-emerald-500 transition-colors" /></div>
-        <button onClick={() => { onUpdate({ ...user, ...data }); alert('Profil Anda berhasil diperbarui!'); }} className="w-full bg-emerald-700 text-white py-5 rounded-[1.8rem] font-black shadow-xl uppercase active:scale-95 transition-all mt-6 tracking-[0.2em]">SIMPAN</button>
+        <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">Password</label><input type="text" value={data.password} onChange={e => setData(p => ({ ...p, password: e.target.value }))} className="w-full p-4 bg-slate-50 rounded-2xl font-bold border border-slate-50 outline-none focus:border-emerald-500 transition-colors" /></div>
+        <button onClick={() => { onUpdate({ ...user, ...data }); alert('Profil berhasil diperbarui!'); }} className="w-full bg-emerald-700 text-white py-5 rounded-[1.8rem] font-black shadow-xl uppercase active:scale-95 transition-all mt-6 tracking-[0.2em]">SIMPAN</button>
       </div>
     </div>
   );
