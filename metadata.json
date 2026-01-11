@@ -1,0 +1,8 @@
+
+{
+  "name": "UB. Qurrotul 'Ibaad",
+  "description": "A mobile-first cooperative management application for members and administrators, featuring savings tracking, store management, and financial reporting.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
